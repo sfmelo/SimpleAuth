@@ -9,9 +9,24 @@ from couchbase.cluster import Cluster
 from couchbase.options import ClusterOptions
 from couchbase.exceptions import (
     CouchbaseException,
+    BucketNotFoundException,
     DocumentExistsException,
     DocumentNotFoundException,
 )
+with open('couchbase.json') as f:
+    data = json.load(f) 
+
+cb_info = {
+    "host": data["host"],
+    "bucket": data["bucket"],
+    "scope": data["scope"],
+    "collection": data["default_collection"],
+    "username": data["username"],
+    "password": data["password"]
+}
+
+PROFILE_COLLECTION = data["profiles_collection"]
+ACCESS_COLLECTION = data["access_collection"]
 
 DEBUG = os.getenv("DEBUG", False)
 PASS_SALT = bcrypt.gensalt()
@@ -22,7 +37,7 @@ class CouchbaseClient:
     def __init__(self, host, bucket, scope, collection, username, password):
         self.host = host
         self.bucket_name = bucket
-        self.collection_name = collection
+        self.default_collection = collection
         self.scope_name = scope
         self.username = username
         self.password = password
@@ -41,40 +56,64 @@ class CouchbaseClient:
             raise
         
         self._bucket = self._cluster.bucket(self.bucket_name)
+       
         self._collection = self._bucket.scope(self.scope_name).collection(
-            self.collection_name
+            self.default_collection
         )
+
+        try:
+            # create index if it doesn't exist
+            createIndexProfile = f"CREATE PRIMARY INDEX profile_index ON {self.bucket_name}.{self.scope_name}.{PROFILE_COLLECTION}"
+            createIndexAccess = f"CREATE PRIMARY INDEX profile_index ON {self.bucket_name}.{self.scope_name}.{ACCESS_COLLECTION}"
+            createIndex = f"CREATE PRIMARY INDEX ON {self.bucket_name}"
+
+            self._cluster.query(createIndexProfile).execute()
+            self._cluster.query(createIndexAccess).execute()
+            self._cluster.query(createIndex).execute()
+        except CouchbaseException as e:
+            print("Index already exists")
+        except Exception as e:
+            print(f"Error: {type(e)}{e}")
     
-    def get(self, key):
+    def _change_col(self, new_coll):
+        self._collection = self._bucket.scope(self.scope_name).collection(
+            new_coll
+        )
+
+    def get(self, coll, key):
+        if self._collection.name != coll:
+            self._change_col(self, coll)
         return self._collection.get(key)
 
-    def insert(self, key, doc):
+    def insert(self, coll, key, doc):
+        if self._collection.name != coll:
+            self._change_col(self, coll)
         return self._collection.insert(key, doc)
 
-    def upsert(self, key, doc):
+    def upsert(self, coll, key, doc):
+        if self._collection.name != coll:
+            self._change_col(self, coll)
         return self._collection.upsert(key, doc)
 
-    def remove(self, key):
+    def remove(self, coll, key):
+        if self._collection.name != coll:
+            self._change_col(self, coll)
         return self._collection.remove(key)
+    
+    def user_exists(self, username, email):
+        q = f"SELECT p.* FROM {self.bucket_name}.{self.scope_name}.{PROFILE_COLLECTION} AS p WHERE username = '{username}' OR email = '{email}'"
+        result = self._cluster.query(q)
+        
+        for _ in result.rows():
+            return True
+        return False
+    
+    def get_user(self, username):
+        q = f"SELECT p.* FROM {self.bucket_name}.{self.scope_name}.{PROFILE_COLLECTION} AS p USE KEYS 'userprofile:{username}'"
+        result = self._cluster.query(q)
+        for row in result.rows():
+            print(row)
 
-    def query(self, strQuery, *options, **kwargs):
-        # options are used for positional parameters
-        # kwargs are used for named parameters
-
-        # bucket.query() is different from cluster.query()
-        return self._cluster.query(strQuery, *options, **kwargs)
-
-with open('couchbase.json') as f:
-    data = json.load(f) 
-
-cb_info = {
-    "host": data["host"],
-    "bucket": data["bucket"],
-    "scope": data["scope"],
-    "collection": data["collection"],
-    "username": data["username"],
-    "password": data["password"]
-}
 cb = CouchbaseClient(*cb_info.values())
 cb.connect()
 
@@ -86,25 +125,33 @@ class User:
         self.created = datetime.datetime.now().isoformat()
         self.updated = self.created
 
+def custom_response(status_code, parameter, message):
+    response = jsonify({parameter: message})
+    response.status_code = status_code
+    return response
+
 @app.route('/register', methods=['POST'])
 def register_user():
-    body = request.get_json()    
+    body = request.get_json()   
     new_user = User(body["username"], body["email"], body["password"])
-    cb.upsert(new_user.username, new_user.__dict__)
+    if cb.user_exists(new_user.username, new_user.email):
+        return custom_response(409, "error", "given username/email already exists")
+    
+    cb.upsert(PROFILE_COLLECTION, "userprofile:" + new_user.username, new_user.__dict__)
     return Response(status=201)
 
 @app.route('/login', methods=['POST'])
 def login_user():
     username = request.authorization.username
     password = request.authorization.password
-
+    cb.get_user(username=username)
     # get matching user from couchbase #
     
     # create and store in couchbase access document #
 
     # return token #
 
-    pass
+    return Response(status=200)
     
 @app.route('/verify', methods=['GET'])
 def verify_user():

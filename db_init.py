@@ -1,6 +1,6 @@
 import json
 import time
-import os
+from datetime import timedelta
 
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster
@@ -17,7 +17,9 @@ password = data["password"]
 host = data["host"]
 bucket = data["bucket"]
 scope = data["scope"]
-collection = data["collection"]
+profiles_collection = data["profiles_collection"]
+access_collection = data["access_collection"]
+
 
 def create_bucket(cluster):
     try:
@@ -34,17 +36,17 @@ def create_scope(cluster):
         bkt = cluster.bucket(bucket)
         bkt.collections().create_scope(scope)
     except CouchbaseException as e:
-        print("Scope already exists")
+        print("Scope already exists: " + e)
     except Exception as e:
         print(f"Error: {e}")
 
-def create_collection(cluster):
+def create_collection(cluster, collection):
     try:
         colSpec = CollectionSpec(collection, scope_name=scope)
         bkt = cluster.bucket(bucket)
         bkt.collections().create_collection(colSpec)
     except CouchbaseException as e:
-        print("Collection already exists")
+        print("Collection already exists: " + e)
     except Exception as e:
         print(f"Error: {e}")
 
@@ -59,12 +61,11 @@ def initialize_db():
 
     # Create Bucket
     create_bucket(cluster)
-    time.sleep(5)
 
     # Create Scope & Collection
     create_scope(cluster)
-    create_collection(cluster)
-    time.sleep(5)
+    create_collection(cluster, profiles_collection)
+    create_collection(cluster, access_collection)
 
     print("Initializing DB complete")
 
