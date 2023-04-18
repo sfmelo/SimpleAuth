@@ -65,6 +65,9 @@ def login_user():
     password = request.authorization.password
     user = db.get_user(username=username)
 
+    if user == None:
+        return custom_response(401, "error", "invalid credentials")
+
     # check password
     if not bcrypt.checkpw(password.encode('ascii'), user["password"].encode('ascii')):
         return custom_response(401, "error", "invalid credentials")

@@ -3,7 +3,7 @@
     {
         "username": "Administrator",
         "password": "password",
-        "host": "localhost",
+        "host": "db",
         "bucket": "simple_auth",
         "scope": "users",
         "default_collection": "profiles",

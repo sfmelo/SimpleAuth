@@ -1,5 +1,6 @@
 import json
 import uuid
+import time
 from datetime import timedelta, timezone, datetime
 
 from couchbase.auth import PasswordAuthenticator
@@ -7,12 +8,10 @@ from couchbase.cluster import Cluster
 from couchbase.exceptions import CouchbaseException
 from couchbase.management.buckets import BucketSettings
 from couchbase.management.collections import CollectionSpec
-from couchbase.options import ClusterOptions
+from couchbase.options import ClusterOptions, ClusterTimeoutOptions
 from couchbase.exceptions import (
     CouchbaseException,
-    BucketNotFoundException,
-    DocumentExistsException,
-    DocumentNotFoundException,
+    BucketNotFoundException
 )
 
 with open('config.json') as f:
@@ -46,15 +45,21 @@ class CouchbaseClient:
     
         try:
             cluster_opts = ClusterOptions(
-                authenticator=PasswordAuthenticator(self.username, self.password)
+                authenticator=PasswordAuthenticator(self.username, self.password),
+                timeout_options=ClusterTimeoutOptions(connect_timeout=timedelta(seconds=20), kv_timeout=timedelta(seconds=20)),
             )
+
             self._cluster = Cluster(conn_str, cluster_opts, **kwargs)
         except CouchbaseException as error:
             print(error)
             raise
         
-        self._bucket = self._cluster.bucket(self.bucket_name)
-       
+        try:
+            self._bucket = self._cluster.bucket(self.bucket_name)
+        except BucketNotFoundException:
+            initialize_db()
+            self._bucket = self._cluster.bucket(self.bucket_name)
+
         self._collection = self._bucket.scope(self.scope_name).collection(
             self.default_collection
         )
@@ -110,8 +115,8 @@ class CouchbaseClient:
         q = f"SELECT p.* FROM {self.bucket_name}.{self.scope_name}.{PROFILE_COLLECTION} AS p USE KEYS 'userprofile:{username}'"
         result = self._cluster.query(q)
         for row in result.rows():
-            user = row
-        return user
+            return row
+        return None
 
     def register_user(self, user):
         self._upsert(PROFILE_COLLECTION, "userprofile:"+ user.username, user.__dict__)
@@ -166,20 +171,31 @@ def create_collection(cluster, collection):
 
 
 def initialize_db():
-    connection_str = "couchbase://" + host
-    print("Initializing DB")
-    cluster = Cluster(
-        connection_str,
-        ClusterOptions(PasswordAuthenticator(username, password))
-    )
+    try:
+        connection_str = "couchbase://" + host
+        print("Initializing DB")
+        cluster_opts = ClusterOptions(
+                    authenticator=PasswordAuthenticator(username, password),
+                    timeout_options=ClusterTimeoutOptions(connect_timeout=timedelta(seconds=40), kv_timeout=timedelta(seconds=40)),
+                )
+        cluster = Cluster(
+            connection_str,
+            cluster_opts
+        )
+        cluster.wait_until_ready(timeout=timedelta(seconds=20))
+        
+        # Create Bucket
+        create_bucket(cluster)
 
-    # Create Bucket
-    create_bucket(cluster)
 
-    # Create Scope & Collection
-    create_scope(cluster)
-    create_collection(cluster, profiles_collection)
-    create_collection(cluster, access_collection)
+        # Create Scope & Collection
+        create_scope(cluster)
+        create_collection(cluster, profiles_collection)
+    
+
+        create_collection(cluster, access_collection)
+    except CouchbaseException:
+        pass
 
     print("Initializing DB complete")
 
