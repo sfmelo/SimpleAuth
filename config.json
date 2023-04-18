@@ -11,5 +11,5 @@
         "access_collection": "access"
     },
     "jwt_secrets": "secrets123",
-    "jwt_exp_min": 1
+    "jwt_exp_min": 15
 }
