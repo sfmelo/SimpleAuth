@@ -1,8 +1,0 @@
-{
-    "username": "Administrator",
-    "password": "password",
-    "host": "localhost",
-    "bucket": "users",
-    "scope": "default",
-    "collection": "default"
-}

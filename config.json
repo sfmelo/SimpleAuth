@@ -1,0 +1,15 @@
+{
+    "couchbase":
+    {
+        "username": "Administrator",
+        "password": "password",
+        "host": "localhost",
+        "bucket": "simple_auth",
+        "scope": "users",
+        "default_collection": "profiles",
+        "profiles_collection": "profiles",
+        "access_collection": "access"
+    },
+    "jwt_secrets": "secrets123",
+    "jwt_exp_min": 5
+}

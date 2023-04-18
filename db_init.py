@@ -9,7 +9,7 @@ from couchbase.management.buckets import BucketSettings
 from couchbase.management.collections import CollectionSpec
 from couchbase.options import ClusterOptions
 
-with open('couchbase.json') as f:
+with open('config.json') as f:
     data = json.load(f)
 
 username = data["username"]

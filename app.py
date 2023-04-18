@@ -1,7 +1,10 @@
 import os
 import bcrypt
-import datetime
 import json
+import jwt
+import uuid
+from datetime import datetime, timezone, timedelta
+
 from flask import Flask, request, Response, jsonify
 
 from couchbase.auth import PasswordAuthenticator
@@ -13,23 +16,29 @@ from couchbase.exceptions import (
     DocumentExistsException,
     DocumentNotFoundException,
 )
-with open('couchbase.json') as f:
+with open('config.json') as f:
     data = json.load(f) 
 
+cb_data = data["couchbase"]
 cb_info = {
-    "host": data["host"],
-    "bucket": data["bucket"],
-    "scope": data["scope"],
-    "collection": data["default_collection"],
-    "username": data["username"],
-    "password": data["password"]
+    "host": cb_data["host"],
+    "bucket": cb_data["bucket"],
+    "scope": cb_data["scope"],
+    "collection": cb_data["default_collection"],
+    "username": cb_data["username"],
+    "password": cb_data["password"]
 }
 
-PROFILE_COLLECTION = data["profiles_collection"]
-ACCESS_COLLECTION = data["access_collection"]
+PROFILE_COLLECTION = cb_data["profiles_collection"]
+ACCESS_COLLECTION = cb_data["access_collection"]
+
+JWT_SECRETS = data["jwt_secrets"]
+JWT_EXP_MIN = data["jwt_exp_min"]
 
 DEBUG = os.getenv("DEBUG", False)
 PASS_SALT = bcrypt.gensalt()
+
+TIMEZONE = timezone.utc
 
 app = Flask(__name__)
 
@@ -80,24 +89,24 @@ class CouchbaseClient:
             new_coll
         )
 
-    def get(self, coll, key):
+    def _get(self, coll, key):
         if self._collection.name != coll:
-            self._change_col(self, coll)
+            self._change_col(coll)
         return self._collection.get(key)
 
-    def insert(self, coll, key, doc):
+    def _insert(self, coll, key, doc):
         if self._collection.name != coll:
-            self._change_col(self, coll)
+            self._change_col(coll)
         return self._collection.insert(key, doc)
 
-    def upsert(self, coll, key, doc):
+    def _upsert(self, coll, key, doc):
         if self._collection.name != coll:
-            self._change_col(self, coll)
+            self._change_col(coll)
         return self._collection.upsert(key, doc)
 
-    def remove(self, coll, key):
+    def _remove(self, coll, key):
         if self._collection.name != coll:
-            self._change_col(self, coll)
+            self._change_col(coll)
         return self._collection.remove(key)
     
     def user_exists(self, username, email):
@@ -112,7 +121,31 @@ class CouchbaseClient:
         q = f"SELECT p.* FROM {self.bucket_name}.{self.scope_name}.{PROFILE_COLLECTION} AS p USE KEYS 'userprofile:{username}'"
         result = self._cluster.query(q)
         for row in result.rows():
-            print(row)
+            user = row
+        return user
+
+    def register_user(self, user):
+        self._upsert(PROFILE_COLLECTION, "userprofile:"+ user.username, user.__dict__)
+    
+    def store_login_access(self, username, token, ip, exp):
+        doc = {
+            "token": token,
+            "user_id": username,
+            "IP": ip,
+            "expiry": exp.isoformat(),
+            "created": datetime.now(tz=TIMEZONE).isoformat(),
+        }
+
+        self._upsert(ACCESS_COLLECTION, str(uuid.uuid4()), doc)
+        pass
+
+    def is_logged_in(self, username):
+        q = f"SELECT token FROM {self.bucket_name}.{self.scope_name}.{ACCESS_COLLECTION}  WHERE user_id = '{username}' AND STR_TO_MILLIS(expiry) > CLOCK_MILLIS()"
+        result = self._cluster.query(q)
+        for row in result.rows():
+            return row["token"]
+        return None
+        
 
 cb = CouchbaseClient(*cb_info.values())
 cb.connect()
@@ -122,7 +155,7 @@ class User:
         self.username = username
         self.email = email
         self.password = bcrypt.hashpw(password.encode('ascii'), PASS_SALT).decode("ascii")
-        self.created = datetime.datetime.now().isoformat()
+        self.created = datetime.now(tz=TIMEZONE).isoformat()
         self.updated = self.created
 
 def custom_response(status_code, parameter, message):
@@ -137,28 +170,48 @@ def register_user():
     if cb.user_exists(new_user.username, new_user.email):
         return custom_response(409, "error", "given username/email already exists")
     
-    cb.upsert(PROFILE_COLLECTION, "userprofile:" + new_user.username, new_user.__dict__)
+    cb.register_user(new_user)
     return Response(status=201)
 
 @app.route('/login', methods=['POST'])
 def login_user():
     username = request.authorization.username
     password = request.authorization.password
-    cb.get_user(username=username)
-    # get matching user from couchbase #
-    
-    # create and store in couchbase access document #
+    user = cb.get_user(username=username)
 
-    # return token #
+    # check password
+    if not bcrypt.checkpw(password.encode('ascii'), user["password"].encode('ascii')):
+        return custom_response(401, "error", "invalid credentials")
 
-    return Response(status=200)
+    # check if it's not already logged in
+    token = cb.is_logged_in(username)
+    if token != None:
+        return custom_response(200, "token", token)
+
+    token_exp = datetime.now(tz=TIMEZONE) + timedelta(minutes=JWT_EXP_MIN)
+    token = jwt.encode({
+        "username": user["username"],
+        "email": user["email"],
+        "exp": token_exp},
+        JWT_SECRETS
+    )
+
+    cb.store_login_access(username, token, request.remote_addr, token_exp)
+    return custom_response(200, "token", token)
     
 @app.route('/verify', methods=['GET'])
 def verify_user():
     token = request.headers["Authorization"].split(" ")[1]
 
     # check if token is valid and not expired #
-    pass
+    try:
+        decoded = jwt.decode(token, JWT_SECRETS, leeway=60)
+    except jwt.ExpiredSignatureError:
+        return custom_response(401, "error", "token is expired")
+    except jwt.InvalidTokenError:
+        return custom_response(401, "error", "token is invalid")
+    
+    return Response(status=200)
 
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=8080, debug=True)
