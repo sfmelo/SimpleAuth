@@ -155,7 +155,7 @@ def create_scope(cluster):
         bkt = cluster.bucket(bucket)
         bkt.collections().create_scope(scope)
     except CouchbaseException as e:
-        print("Scope already exists: " + e)
+        print("Scope already exists: " + str(e))
     except Exception as e:
         print(f"Error: {e}")
 
@@ -165,7 +165,7 @@ def create_collection(cluster, collection):
         bkt = cluster.bucket(bucket)
         bkt.collections().create_collection(colSpec)
     except CouchbaseException as e:
-        print("Collection already exists: " + e)
+        print("Collection already exists: " + str(e))
     except Exception as e:
         print(f"Error: {e}")
 
