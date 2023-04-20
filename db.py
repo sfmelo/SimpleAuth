@@ -1,6 +1,6 @@
 import json
 import uuid
-import time
+import logging
 from datetime import timedelta, timezone, datetime
 
 from couchbase.auth import PasswordAuthenticator
@@ -13,6 +13,8 @@ from couchbase.exceptions import (
     CouchbaseException,
     BucketNotFoundException
 )
+
+logging.basicConfig(format="%(asctime)s - %(message)s", datefmt='%d-%b-%y %H:%M:%S')
 
 with open('config.json') as f:
     data = json.load(f) 
@@ -51,7 +53,7 @@ class CouchbaseClient:
 
             self._cluster = Cluster(conn_str, cluster_opts, **kwargs)
         except CouchbaseException as error:
-            print(error)
+            logging.error(error)
             raise
         
         try:
@@ -74,9 +76,9 @@ class CouchbaseClient:
             self._cluster.query(createIndexAccess).execute()
             self._cluster.query(createIndex).execute()
         except CouchbaseException as e:
-            print("Index already exists")
+            logging.warning("Index already exists")
         except Exception as e:
-            print(f"Error: {type(e)}{e}")
+            logging.error(f"{type(e)}{e}")
     
     def _change_col(self, new_coll):
         self._collection = self._bucket.scope(self.scope_name).collection(
@@ -146,18 +148,19 @@ def create_bucket(cluster):
         bucketSettings = BucketSettings(name=bucket, ram_quota_mb=256)
         cluster.buckets().create_bucket(bucketSettings)
     except CouchbaseException as e:
-        print("Bucket already exists")
+        logging.warning("Bucket already exists")
     except Exception as e:
-        print(f"Error: {e}")
+        logging.error(e)
+
 
 def create_scope(cluster):
     try:
         bkt = cluster.bucket(bucket)
         bkt.collections().create_scope(scope)
     except CouchbaseException as e:
-        print("Scope already exists: " + str(e))
+        logging.warning("Scope already exists: " + str(e))
     except Exception as e:
-        print(f"Error: {e}")
+        logging.error(e)
 
 def create_collection(cluster, collection):
     try:
@@ -165,15 +168,16 @@ def create_collection(cluster, collection):
         bkt = cluster.bucket(bucket)
         bkt.collections().create_collection(colSpec)
     except CouchbaseException as e:
-        print("Collection already exists: " + str(e))
+        logging.warning("Collection already exists: " + str(e))
     except Exception as e:
-        print(f"Error: {e}")
+        logging.error(e)
+
 
 
 def initialize_db():
     try:
         connection_str = "couchbase://" + host
-        print("Initializing DB")
+        logging.info("Initializing DB")
         cluster_opts = ClusterOptions(
                     authenticator=PasswordAuthenticator(username, password),
                     timeout_options=ClusterTimeoutOptions(connect_timeout=timedelta(seconds=40), kv_timeout=timedelta(seconds=40)),
@@ -197,7 +201,7 @@ def initialize_db():
     except CouchbaseException:
         pass
 
-    print("Initializing DB complete")
+    logging.info("Initializing DB complete")
 
 
 
